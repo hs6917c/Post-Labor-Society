@@ -1,5 +1,5 @@
 import React from 'react';
-import { OutlineItem, REPORT_OUTLINE } from '../types';
+import { REPORT_OUTLINE } from '../types';
 import { BookOpen, Activity, Cpu, Battery, Users, Layers, Award } from 'lucide-react';
 
 interface SidebarProps {
@@ -20,6 +20,12 @@ const ICONS: Record<string, React.ReactNode> = {
 };
 
 const Sidebar: React.FC<SidebarProps> = ({ currentSectionId, onSelectSection, isOpen, toggleSidebar }) => {
+  
+  const handleNavClick = (id: string) => {
+    onSelectSection(id);
+    if(window.innerWidth < 1024) toggleSidebar();
+  };
+
   return (
     <>
       {/* Mobile Overlay */}
@@ -44,10 +50,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentSectionId, onSelectSection, is
             {REPORT_OUTLINE.map((item) => (
               <li key={item.id}>
                 <button
-                  onClick={() => {
-                    onSelectSection(item.id);
-                    if(window.innerWidth < 1024) toggleSidebar();
-                  }}
+                  onClick={() => handleNavClick(item.id)}
                   className={`w-full text-left flex items-start gap-3 p-3 rounded-lg transition-all duration-200 group ${
                     currentSectionId === item.id 
                       ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/30' 

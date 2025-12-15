@@ -1,103 +1,105 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Sidebar from './components/Sidebar';
 import { REPORT_OUTLINE, GeneratedContent } from './types';
 import { generateSectionContent } from './services/geminiService';
-import ChartSection from './components/ChartSection';
-import ProjectSimulator from './components/ProjectSimulator';
-import Timeline from './components/Timeline';
-import { Menu, Loader2, Share2, Info } from 'lucide-react';
+import SectionView from './components/SectionView';
+import { Menu, Share2, Info, Rocket } from 'lucide-react';
 
 const App: React.FC = () => {
-  const [currentSectionId, setCurrentSectionId] = useState<string>('intro');
+  const [activeSectionId, setActiveSectionId] = useState<string>('intro');
   const [contentCache, setContentCache] = useState<Record<string, GeneratedContent>>({});
-  const [loading, setLoading] = useState<boolean>(false);
+  const [loadingStates, setLoadingStates] = useState<Record<string, boolean>>({});
   const [sidebarOpen, setSidebarOpen] = useState(false);
   
-  // Ref to track which sections are currently being fetched to avoid duplicates
-  const fetchingRef = useRef<Set<string>>(new Set());
+  // To avoid duplicate fetches
+  const fetchQueueRef = useRef<Set<string>>(new Set());
 
-  const fetchSectionData = async (id: string) => {
-    if (contentCache[id] || fetchingRef.current.has(id)) return;
+  // Function to fetch a specific section
+  const fetchSection = async (id: string) => {
+    if (contentCache[id] || fetchQueueRef.current.has(id)) return;
     
-    fetchingRef.current.add(id);
+    fetchQueueRef.current.add(id);
+    setLoadingStates(prev => ({ ...prev, [id]: true }));
+
     const section = REPORT_OUTLINE.find(item => item.id === id);
     if (!section) return;
 
     try {
-      // console.log("Fetching section:", id); // Debug
       const data = await generateSectionContent(section.title, section.subItems || []);
       setContentCache(prev => ({ ...prev, [id]: data }));
     } catch (error) {
-      console.error("Failed to load section", error);
+      console.error(`Failed to load section ${id}`, error);
     } finally {
-      fetchingRef.current.delete(id);
+      setLoadingStates(prev => ({ ...prev, [id]: false }));
+      fetchQueueRef.current.delete(id);
     }
   };
 
-  // Initial Data for Intro
+  // 1. Initial Load & Staggered Fetching Strategy
   useEffect(() => {
-    if (!contentCache['intro']) {
-       loadSection('intro');
-    }
+    // Immediately fetch the first section
+    fetchSection('intro');
+
+    // Stagger fetch the rest to avoid freezing the UI or hitting rate limits instantly
+    // We queue them up with delays
+    REPORT_OUTLINE.slice(1).forEach((item, index) => {
+      setTimeout(() => {
+        fetchSection(item.id);
+      }, 1500 + (index * 2500)); // Start after 1.5s, then every 2.5s
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Prefetching Logic: Automatically fetch the NEXT section
+  // 2. Intersection Observer for Scroll Spy
   useEffect(() => {
-    const currentIndex = REPORT_OUTLINE.findIndex(item => item.id === currentSectionId);
-    if (currentIndex !== -1 && currentIndex < REPORT_OUTLINE.length - 1) {
-      const nextId = REPORT_OUTLINE[currentIndex + 1].id;
-      // Small delay to prioritize the current render/interaction
-      const timer = setTimeout(() => {
-        if (!contentCache[nextId]) {
-          fetchSectionData(nextId);
+    const observerOptions = {
+      root: null,
+      rootMargin: '-20% 0px -60% 0px', // Active when element is in the top-middle of screen
+      threshold: 0
+    };
+
+    const observerCallback = (entries: IntersectionObserverEntry[]) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          setActiveSectionId(entry.target.id);
         }
-      }, 1000);
-      return () => clearTimeout(timer);
-    }
-  }, [currentSectionId, contentCache]);
+      });
+    };
 
-  const loadSection = useCallback(async (id: string) => {
-    setSidebarOpen(false); // Close mobile sidebar on select
-    setCurrentSectionId(id);
+    const observer = new IntersectionObserver(observerCallback, observerOptions);
+    REPORT_OUTLINE.forEach(item => {
+      const element = document.getElementById(item.id);
+      if (element) observer.observe(element);
+    });
 
-    if (contentCache[id]) {
-      // Already cached, instant transition
-      return;
-    }
+    return () => observer.disconnect();
+  }, [contentCache]); // Re-run observer when content changes (heights might change)
 
-    setLoading(true);
-    await fetchSectionData(id);
-    setLoading(false);
-  }, [contentCache]);
 
-  const currentSectionData = contentCache[currentSectionId];
-  const currentSectionMeta = REPORT_OUTLINE.find(i => i.id === currentSectionId);
-
-  // Render markdown content safely
-  const renderMarkdown = (text: string) => {
-    // Basic markdown parsing for the demo (in production, use react-markdown)
-    let html = text
-      .replace(/^### (.*$)/gim, '<h3 class="text-xl font-bold text-cyan-100 mt-8 mb-4">$1</h3>')
-      .replace(/^## (.*$)/gim, '<h2 class="text-2xl font-bold text-white mt-10 mb-6 pb-2 border-b border-slate-700">$1</h2>')
-      .replace(/^# (.*$)/gim, '<h1 class="text-3xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-500 mb-6">$1</h1>')
-      .replace(/\*\*(.*)\*\*/gim, '<strong class="text-cyan-300 font-semibold">$1</strong>')
-      .replace(/^\- (.*$)/gim, '<li class="ml-4 list-disc marker:text-cyan-500 pl-2 mb-2 text-slate-300">$1</li>')
-      .replace(/\n/gim, '<br />');
+  // 3. Navigation Handler
+  const scrollToSection = (id: string) => {
+    const element = document.getElementById(id);
+    if (element) {
+      element.scrollIntoView({ behavior: 'smooth' });
+      setActiveSectionId(id);
       
-    return { __html: html };
+      // If it's not loaded yet for some reason, force fetch immediately
+      if (!contentCache[id] && !loadingStates[id]) {
+        fetchSection(id);
+      }
+    }
   };
 
   return (
     <div className="flex min-h-screen bg-slate-950">
       <Sidebar 
-        currentSectionId={currentSectionId} 
-        onSelectSection={loadSection} 
+        currentSectionId={activeSectionId} 
+        onSelectSection={scrollToSection} 
         isOpen={sidebarOpen}
         toggleSidebar={() => setSidebarOpen(!sidebarOpen)}
       />
 
-      <main className="flex-1 lg:ml-72 min-h-screen flex flex-col">
+      <main className="flex-1 lg:ml-72 min-h-screen flex flex-col relative">
         {/* Header */}
         <header className="sticky top-0 z-30 bg-slate-950/80 backdrop-blur-md border-b border-slate-800 px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-4">
@@ -107,54 +109,43 @@ const App: React.FC = () => {
             >
               <Menu />
             </button>
-            <h2 className="text-lg font-medium text-slate-200 truncate max-w-[200px] md:max-w-none">
-              {currentSectionMeta?.title}
-            </h2>
+            <div className="flex flex-col">
+               <h2 className="text-lg font-medium text-slate-200">
+                  Future Civilization Report
+               </h2>
+               <span className="text-xs text-cyan-500 font-mono">Live Generation Active</span>
+            </div>
           </div>
           <div className="flex items-center gap-3">
-             <button className="p-2 text-slate-400 hover:text-cyan-400 transition-colors" title="Share Report">
-               <Share2 size={18} />
+             <button className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-cyan-500/10 text-cyan-400 rounded-full text-xs font-bold border border-cyan-500/20">
+               <Rocket size={14} />
+               <span>v2.0 Single View</span>
              </button>
-             <button className="p-2 text-slate-400 hover:text-cyan-400 transition-colors" title="About">
-               <Info size={18} />
+             <button className="p-2 text-slate-400 hover:text-cyan-400 transition-colors" title="Share">
+               <Share2 size={18} />
              </button>
           </div>
         </header>
 
-        {/* Content Area */}
+        {/* Content Area - Single Scrollable Page */}
         <div className="flex-1 p-6 md:p-10 max-w-5xl mx-auto w-full">
-          {loading ? (
-             <div className="flex flex-col items-center justify-center h-[60vh] text-slate-500">
-               <Loader2 className="w-10 h-10 animate-spin text-cyan-500 mb-4" />
-               <p className="animate-pulse font-mono text-sm">AI Research Agent is analyzing data...</p>
-             </div>
-          ) : currentSectionData ? (
-            <article className="animate-fade-in pb-20">
-              <div 
-                className="prose prose-invert prose-lg max-w-none text-slate-300 leading-relaxed"
-                dangerouslySetInnerHTML={renderMarkdown(currentSectionData.markdown)} 
-              />
-              
-              {/* Dynamic Timeline - Shown if data exists (likely in project-society or conclusion) */}
-              {currentSectionData.timelineEvents && currentSectionData.timelineEvents.length > 0 && (
-                <Timeline events={currentSectionData.timelineEvents} />
-              )}
-
-              {/* Dynamic Chart */}
-              {currentSectionData.chartData && (
-                <ChartSection data={currentSectionData} />
-              )}
-
-              {/* Project Simulator Module */}
-              {currentSectionId === 'project-society' && (
-                <ProjectSimulator />
-              )}
-            </article>
-          ) : (
-             <div className="text-center text-slate-500 mt-20">
-               <p>Select a chapter to begin.</p>
-             </div>
-          )}
+           {REPORT_OUTLINE.map((item) => (
+             <SectionView 
+               key={item.id}
+               item={item}
+               data={contentCache[item.id]}
+               isLoading={loadingStates[item.id] || (!contentCache[item.id] && !loadingStates[item.id] && false)} // Just show skeleton if loading or waiting
+               error={undefined}
+             />
+           ))}
+           
+           {/* Footer */}
+           <div className="py-20 text-center border-t border-slate-900 mt-20">
+              <h3 className="text-2xl font-bold text-slate-700 mb-4">Report End</h3>
+              <p className="text-slate-500 text-sm">
+                Generated by Gemini 2.5 Flash • 2025 Visionary Report
+              </p>
+           </div>
         </div>
       </main>
 
@@ -165,6 +156,9 @@ const App: React.FC = () => {
         }
         .animate-fade-in {
           animation: fadeIn 0.5s ease-out forwards;
+        }
+        html {
+          scroll-behavior: smooth;
         }
       `}</style>
     </div>
